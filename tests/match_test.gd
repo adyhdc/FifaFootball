@@ -13,6 +13,7 @@ func _initialize() -> void:
 	test_restarts_and_fouls()
 	test_offside()
 	test_controls_and_ai()
+	test_open_play_shots()
 	test_match_lifecycle()
 	print("TOUCHLINE_RULES: %d checks, %d failures" % [cases, failures])
 	quit(1 if failures else 0)
@@ -178,6 +179,28 @@ func test_controls_and_ai() -> void:
 	for i in range(360):
 		game.tick(STEP)
 	check(game.remaining < Game.HALF_SECONDS - 1, "AI takes the kickoff and plays without human input")
+
+func test_open_play_shots() -> void:
+	for team in range(2):
+		var game := Game.new()
+		game.reset(team)
+		var dir := game.direction(team)
+		var shooter := team * 5 + 4
+		var keeper := (1 - team) * 5
+		for id in range(10):
+			game.players[id].point = Vector2(-6.0 + id, 12.0)
+		game.players[shooter].point = Vector2(20.2 * dir, -1.1)
+		game.players[shooter].facing = Vector2(dir, 0)
+		game.players[keeper].point = Vector2(24.5 * dir, 0)
+		game.ball = game.players[shooter].point + Vector2(dir * 0.64, 0)
+		game.phase = Game.Phase.PLAY
+		game.touch(shooter)
+		game.tick(STEP, {"action": "shot", "move": Vector2(dir * 0.4, -0.8), "power": 0.85})
+		for frame in range(35):
+			game.tick(STEP)
+			if game.phase == Game.Phase.GOAL:
+				break
+		check(game.score[team] == 1, "An aimed open-play shot can beat the goalkeeper in direction %s" % dir)
 
 func test_match_lifecycle() -> void:
 	var game := Game.new()

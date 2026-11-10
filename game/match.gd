@@ -44,6 +44,7 @@ var pickup_delay := 0.0
 var decision_delay := 0.0
 var signal_count := 0
 var input_receiver := -1
+var random := RandomNumberGenerator.new()
 
 func _init() -> void:
 	for id in range(10):
@@ -61,6 +62,7 @@ func reset(team: int) -> void:
 	remaining = HALF_SECONDS
 	score = [0, 0]
 	signal_count = 0
+	random.seed = 5127
 	for player in players:
 		player.tackle_cooldown = 0.0
 	place_restart(R.KICKOFF, 0, Vector2.ZERO, "Anstoß")
@@ -231,6 +233,8 @@ func move_players(delta: float, move: Vector2, sprint: bool) -> void:
 			var target := ai_target(id, team_presser, press_team)
 			desired = (target - player.point).limit_length(1.0)
 			speed = 6.5 if id == owner or id == team_presser else 5.65
+			if id == team_presser and player.team == press_team:
+				speed = 7.55
 			if player.slot == 0:
 				speed = 6.1
 		if id == owner:
@@ -258,11 +262,13 @@ func ai_target(id: int, presser: int, press_team: int) -> Vector2:
 	if player.slot == 0:
 		if owner == id:
 			return player.point
-		var projected := ball + ball_velocity * 0.15
 		var depth := dir * (ball.x - own_goal.x)
-		if depth < 7.0 and absf(ball.y) < 6.4 and (loose or press_team == player.team):
-			return own_goal + Vector2(dir * clampf(depth - 0.4, 0.65, 3.8), clampf(projected.y, -4.5, 4.5))
-		return own_goal + Vector2(dir * clampf(depth * 0.07, 0.8, 2.8), clampf(projected.y * 0.36, -2.85, 2.85))
+		if loose and depth < 12.0 and ball_velocity.x * dir < -12.0 and pickup_delay <= 0.02:
+			var arrival := clampf((depth - 1.0) / absf(ball_velocity.x), 0.0, 0.42)
+			return own_goal + Vector2(dir, clampf(ball.y + ball_velocity.y * arrival, -3.0, 3.0))
+		if depth < 5.0 and absf(ball.y) < 5.4 and press_team == player.team:
+			return own_goal + Vector2(dir * clampf(depth - 0.6, 0.8, 2.8), clampf(ball.y, -3.8, 3.8))
+		return own_goal + Vector2(dir * clampf(depth * 0.06, 0.8, 2.1), clampf(ball.y * 0.27, -2.3, 2.3))
 	if id == owner:
 		var drive := player.point.direction_to(attack_goal)
 		var defender := players[nearest(1 - player.team, player.point, true)]
@@ -272,7 +278,9 @@ func ai_target(id: int, presser: int, press_team: int) -> Vector2:
 	if id == input_receiver and loose:
 		return clamp_pitch(ball + ball_velocity.limit_length(19.0) * 0.25)
 	if id == presser and (loose or press_team == player.team):
-		return clamp_pitch(ball + ball_velocity.limit_length(18.0) * 0.14)
+		if loose:
+			return clamp_pitch(ball + ball_velocity.limit_length(18.0) * 0.14)
+		return clamp_pitch(ball + players[owner].velocity.limit_length(8.0) * 0.28)
 	var shape: Vector2 = FORMATION[player.slot] * dir
 	var shift := Vector2(ball.x * 0.51, ball.y * 0.31)
 	if possession:
@@ -305,7 +313,13 @@ func ai_actions() -> void:
 			kick_action(owner, "pass", Vector2(direction(player.team), 0), 0.55)
 			return
 	var defender := nearest(1 - player.team, player.point)
-	if defender != selected and players[defender].point.distance_to(player.point) < 1.32:
+	var marker := players[defender]
+	var gap := player.point - marker.point
+	if defender == selected or marker.tackle_cooldown > 0 or gap.length() >= 1.33:
+		return
+	var can_reach := marker.point.distance_to(ball) < 1.18 and player.facing.dot(gap.normalized()) < 0.37
+	# A chasing defender normally jockeys and waits until the ball is exposed.
+	if can_reach or random.randf() < 0.0025:
 		attempt_tackle(defender)
 
 func take_restart(action: String, aim: Vector2, power: float) -> void:
@@ -322,7 +336,7 @@ func kick_action(id: int, action: String, aim: Vector2, power: float, from_resta
 	var dir := direction(player.team)
 	var intended := aim.normalized() if aim.length_squared() > 0.09 else player.facing
 	if action == "shot" and from_restart != R.THROW_IN:
-		var target := Vector2(dir * (Rules.HALF_LENGTH + 0.6), clampf(intended.y * 2.5, -2.65, 2.65))
+		var target := Vector2(dir * (Rules.HALF_LENGTH + 0.6), clampf(intended.y * 3.35, -2.9, 2.9))
 		var speed := lerpf(18.5, 35.0, power)
 		var lift := lerpf(2.2, 5.1, power)
 		strike(id, ball.direction_to(target), speed, lift, from_restart)
