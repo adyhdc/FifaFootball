@@ -386,6 +386,7 @@ func style(fill: Color, border: Color, radius: int, padding: int) -> StyleBoxFla
 	return box
 
 func run_smoke() -> void:
+	Input.use_accumulated_input = false
 	await get_tree().process_frame
 	if screen != Screen.TEAMS or not team_button.has_focus() or stadium.athletes.size() != 10:
 		push_error("Team selection or stadium failed to initialise.")
@@ -394,11 +395,20 @@ func run_smoke() -> void:
 	simulate_button(JOY_BUTTON_A, true)
 	await get_tree().process_frame
 	simulate_button(JOY_BUTTON_A, false)
-	for frame in range(50):
+	for frame in range(120):
+		if screen == Screen.GAME and model.delay < 0.28:
+			break
 		await get_tree().physics_frame
+	if screen != Screen.GAME or model.delay >= 0.3:
+		push_error("Gamepad confirmation did not start the match.")
+		get_tree().quit(1)
+		return
+	await get_tree().process_frame
 	simulate_button(JOY_BUTTON_A, true)
-	await get_tree().physics_frame
-	await get_tree().physics_frame
+	for frame in range(6):
+		if model.phase == Game.Phase.PLAY:
+			break
+		await get_tree().physics_frame
 	simulate_button(JOY_BUTTON_A, false)
 	if screen != Screen.GAME or not board.visible or model.phase != Game.Phase.PLAY:
 		push_error("Could not play the opening kick.")
