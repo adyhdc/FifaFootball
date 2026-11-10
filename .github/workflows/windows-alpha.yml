@@ -1,0 +1,103 @@
+name: Windows Alpha
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: 4.6.3
+  BUILD_VERSION: v0.1.0-alpha.1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot and Windows export template
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable"
+          prefix="Godot_v${GODOT_VERSION}-stable"
+          curl -fsSL --retry 3 "$base/${prefix}_linux.x86_64.zip" -o "$RUNNER_TEMP/godot.zip"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          chmod +x "$RUNNER_TEMP/godot/${prefix}_linux.x86_64"
+          ln -s "$RUNNER_TEMP/godot/${prefix}_linux.x86_64" "$RUNNER_TEMP/godot/godot"
+          echo "$RUNNER_TEMP/godot" >> "$GITHUB_PATH"
+          curl -fsSL --retry 3 "$base/${prefix}_export_templates.tpz" -o "$RUNNER_TEMP/templates.tpz"
+          templates="${XDG_DATA_HOME:-$HOME/.local/share}/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$templates"
+          unzip -j "$RUNNER_TEMP/templates.tpz" 'templates/windows_release_x86_64.exe' -d "$templates"
+      - name: Import project and test match rules
+        run: |
+          godot --headless --editor --import
+          godot --headless --script res://tests/match_test.gd
+          godot --headless -- --smoke
+      - name: Export Windows x64
+        run: |
+          mkdir -p "$RUNNER_TEMP/Touchline5"
+          godot --headless --export-release "Windows Desktop" "$RUNNER_TEMP/Touchline5/Touchline5.exe"
+          test -s "$RUNNER_TEMP/Touchline5/Touchline5.exe"
+          test -s "$RUNNER_TEMP/Touchline5/Touchline5.pck"
+          cp README.md "$RUNNER_TEMP/Touchline5/Spielanleitung.md"
+          cd "$RUNNER_TEMP"
+          zip -q -r "Touchline5-$BUILD_VERSION-Windows.zip" Touchline5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-alpha
+          path: ${{ runner.temp }}/Touchline5-${{ env.BUILD_VERSION }}-Windows.zip
+          if-no-files-found: error
+
+  windows-smoke:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-alpha
+      - name: Start the exported Windows executable
+        shell: pwsh
+        run: |
+          Expand-Archive -Path "Touchline5-$env:BUILD_VERSION-Windows.zip" -DestinationPath game
+          $binary = (Resolve-Path "game/Touchline5/Touchline5.exe").Path
+          $log = Join-Path $env:RUNNER_TEMP "touchline-smoke.log"
+          $process = Start-Process $binary -WorkingDirectory (Split-Path $binary) -ArgumentList @('--headless','--log-file',"`"$log`"",'--','--smoke') -PassThru
+          if (!$process.WaitForExit(60000)) {
+            $process.Kill()
+            throw "Windows smoke test timed out."
+          }
+          if (Test-Path $log) { Get-Content $log }
+          if ($process.ExitCode -ne 0) { throw "Game exited with code $($process.ExitCode)." }
+          if (!(Test-Path $log) -or !(Select-String -Path $log -Pattern 'TOUCHLINE_SMOKE_OK' -Quiet)) {
+            throw "Game did not reach the match screen."
+          }
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: windows-smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-alpha
+      - name: Publish the verified pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$BUILD_VERSION" >/dev/null 2>&1; then
+            echo "Release $BUILD_VERSION already exists. Increment BUILD_VERSION for a new release."
+            exit 0
+          fi
+          gh release create "$BUILD_VERSION" "Touchline5-$BUILD_VERSION-Windows.zip" \
+            --target "$GITHUB_SHA" --prerelease --title "Touchline 5 $BUILD_VERSION" \
+            --notes "Erster 5-gegen-5-Anstoß gegen die KI. ZIP entpacken und Touchline5.exe starten."
